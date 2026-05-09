@@ -486,12 +486,104 @@ type MetaTrackingWindow = Window &
     __v4RafaLeadTracked?: boolean;
   };
 
+type MetaApiEventName = "PageView" | "ViewContent" | "Lead";
+
+type MetaApiEventPayload = {
+  eventName: MetaApiEventName;
+  eventId: string;
+  customData?: Record<string, unknown>;
+  userData?: Record<string, unknown>;
+};
+
 function getMetaTrackingWindow() {
   if (typeof window === "undefined") return null;
   const normalizedPath = window.location.pathname.replace(/\/$/, "");
   if (normalizedPath !== metaTrackedPath) return null;
   if (hasAgeRejectedCookie()) return null;
   return window as MetaTrackingWindow;
+}
+
+function getCookieValue(name: string) {
+  if (typeof document === "undefined") return "";
+
+  const cookie = document.cookie
+    .split("; ")
+    .find((item) => item.startsWith(`${name}=`));
+
+  return cookie ? decodeURIComponent(cookie.slice(name.length + 1)) : "";
+}
+
+function setMetaCookie(name: string, value: string) {
+  if (typeof document === "undefined") return;
+
+  document.cookie = [
+    `${name}=${encodeURIComponent(value)}`,
+    "Max-Age=7776000",
+    "Path=/",
+    "SameSite=Lax",
+  ].join("; ");
+}
+
+function getOrCreateFbp() {
+  const existing = getCookieValue("_fbp");
+  if (existing) return existing;
+
+  const randomPart = Math.floor(Math.random() * 10 ** 16);
+  const generated = `fb.1.${Date.now()}.${randomPart}`;
+  setMetaCookie("_fbp", generated);
+  return generated;
+}
+
+function getOrCreateFbc() {
+  const existing = getCookieValue("_fbc");
+  if (existing) return existing;
+
+  const fbclid = new URLSearchParams(window.location.search).get("fbclid");
+  if (!fbclid) return "";
+
+  const generated = `fb.1.${Date.now()}.${fbclid}`;
+  setMetaCookie("_fbc", generated);
+  return generated;
+}
+
+function sendMetaConversionsEvent({
+  eventName,
+  eventId,
+  customData,
+  userData,
+}: MetaApiEventPayload) {
+  const trackingWindow = getMetaTrackingWindow();
+  if (!trackingWindow) return;
+
+  const payload = {
+    eventName,
+    eventId,
+    eventSourceUrl: window.location.href,
+    fbp: getOrCreateFbp(),
+    fbc: getOrCreateFbc(),
+    userData: {
+      external_id: getOrCreateDeviceId(),
+      ...userData,
+    },
+    customData,
+  };
+
+  const body = JSON.stringify(payload);
+
+  if (navigator.sendBeacon) {
+    const blob = new Blob([body], { type: "application/json" });
+    if (navigator.sendBeacon("/api/meta-conversions", blob)) return;
+  }
+
+  void fetch("/api/meta-conversions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    cache: "no-store",
+    keepalive: true,
+  }).catch(() => {
+    // Tracking should never interrupt the funnel experience.
+  });
 }
 
 function ensureMetaPixel(trackPageView = false) {
@@ -531,7 +623,9 @@ function ensureMetaPixel(trackPageView = false) {
 
   if (trackPageView && !trackingWindow.__v4RafaPageViewTracked) {
     trackingWindow.__v4RafaPageViewTracked = true;
-    trackingWindow.fbq("trackSingle", metaPixelId, "PageView");
+    const eventId = `v4-rafa-pageview-${Date.now()}`;
+    trackingWindow.fbq("trackSingle", metaPixelId, "PageView", {}, { eventID: eventId });
+    sendMetaConversionsEvent({ eventName: "PageView", eventId });
   }
 
   return trackingWindow;
@@ -546,11 +640,14 @@ function trackMetaPageView() {
   const eventId = `v4-rafa-pageview-${Date.now()}`;
   trackingWindow.fbq?.("track", "PageView", {}, { eventID: eventId });
   trackingWindow.fbq?.("trackSingle", metaPixelId, "PageView", {}, { eventID: eventId });
+  sendMetaConversionsEvent({ eventName: "PageView", eventId });
 }
 
 function trackMetaEvent(
   eventName: "ViewContent" | "Lead",
   data?: Record<string, unknown>,
+  userData?: Record<string, unknown>,
+  eventId = `v4-rafa-${eventName.toLowerCase()}-${Date.now()}`,
   retries = 20
 ) {
   const trackingWindow = ensureMetaPixel();
@@ -559,16 +656,22 @@ function trackMetaEvent(
 
   if (typeof trackingWindow.fbq === "function") {
     if (data && Object.keys(data).length > 0) {
-      trackingWindow.fbq("trackSingle", metaPixelId, eventName, data);
+      trackingWindow.fbq("trackSingle", metaPixelId, eventName, data, { eventID: eventId });
     } else {
-      trackingWindow.fbq("trackSingle", metaPixelId, eventName);
+      trackingWindow.fbq("trackSingle", metaPixelId, eventName, {}, { eventID: eventId });
     }
+    sendMetaConversionsEvent({
+      eventName,
+      eventId,
+      customData: data,
+      userData,
+    });
     return true;
   }
 
   if (retries <= 0) return false;
 
-  window.setTimeout(() => trackMetaEvent(eventName, data, retries - 1), 250);
+  window.setTimeout(() => trackMetaEvent(eventName, data, userData, eventId, retries - 1), 250);
   return false;
 }
 
@@ -597,7 +700,8 @@ function trackMetaViewContentStep(step: FunnelStep, stepIndex: number, totalStep
   if (trackingWindow.__v4RafaTrackedViewContentSteps.has(stepKey)) return;
 
   trackingWindow.__v4RafaTrackedViewContentSteps.add(stepKey);
-  trackMetaEvent("ViewContent", buildViewContentData(step, stepIndex, totalSteps));
+  const eventId = `v4-rafa-viewcontent-${step}-${Date.now()}`;
+  trackMetaEvent("ViewContent", buildViewContentData(step, stepIndex, totalSteps), undefined, eventId);
 }
 
 function buildMetaLeadData(answers: FunnelAnswers, normalizedPhone: string) {
@@ -649,7 +753,14 @@ function trackMetaLead(answers: FunnelAnswers, normalizedPhone: string) {
   try {
     const { userData, customData } = buildMetaLeadData(answers, normalizedPhone);
     trackingWindow.fbq?.("init", trackingWindow.__v4RafaMetaPixelId || metaPixelId, userData);
-    trackingWindow.fbq?.("trackSingle", metaPixelId, "Lead", customData);
+    const eventId = `v4-rafa-lead-${Date.now()}`;
+    trackingWindow.fbq?.("trackSingle", metaPixelId, "Lead", customData, { eventID: eventId });
+    sendMetaConversionsEvent({
+      eventName: "Lead",
+      eventId,
+      customData,
+      userData,
+    });
   } catch {
     trackMetaEvent("Lead");
   }
