@@ -510,7 +510,11 @@ function trackMetaEvent(
   if (!trackingWindow) return;
 
   if (typeof trackingWindow.fbq === "function") {
-    trackingWindow.fbq("track", eventName, data || {});
+    if (data && Object.keys(data).length > 0) {
+      trackingWindow.fbq("track", eventName, data);
+    } else {
+      trackingWindow.fbq("track", eventName);
+    }
     return;
   }
 
@@ -525,6 +529,62 @@ function updateMetaAdvancedMatching(userData: Record<string, unknown>) {
   if (!trackingWindow || typeof trackingWindow.fbq !== "function") return;
 
   trackingWindow.fbq("init", trackingWindow.__metaPixelId || metaPixelId, userData);
+}
+
+function MetaStepEvent({
+  eventName,
+  data,
+}: {
+  eventName: "ViewContent" | "Lead";
+  data?: Record<string, unknown>;
+}) {
+  useEffect(() => {
+    const fireEvent = () => {
+      const trackingWindow = window as MetaTrackingWindow;
+
+      if (typeof trackingWindow.fbq === "function") {
+        if (data && Object.keys(data).length > 0) {
+          trackingWindow.fbq("track", eventName, data);
+        } else {
+          trackingWindow.fbq("track", eventName);
+        }
+        return true;
+      }
+
+      return false;
+    };
+
+    if (fireEvent()) return;
+
+    const retryId = window.setInterval(() => {
+      if (fireEvent()) {
+        window.clearInterval(retryId);
+      }
+    }, 250);
+
+    const timeoutId = window.setTimeout(() => {
+      window.clearInterval(retryId);
+    }, 5000);
+
+    return () => {
+      window.clearInterval(retryId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [data, eventName]);
+
+  return null;
+}
+
+function buildViewContentData(step: FunnelStep, stepIndex: number, totalSteps: number) {
+  return {
+    content_name: `v4-rafa_${step}`,
+    content_category: "iul_funnel_step",
+    content_type: "lead_form_step",
+    funnel: "v4-rafa",
+    step: stepIndex + 1,
+    step_name: step,
+    total_steps: totalSteps,
+  };
 }
 
 function optionButtonClass(isSelected: boolean, isRecommended = false) {
@@ -891,19 +951,6 @@ export default function Home() {
   const trackedLeadNonceRef = useRef<string | null>(null);
   const trackedViewContentStepsRef = useRef<Set<string>>(new Set());
 
-  useEffect(() => {
-    const trackingWindow = getMetaTrackingWindow();
-    if (!trackingWindow || trackingWindow.__metaPageViewTracked) return;
-
-    trackingWindow.__metaPageViewTracked = true;
-    trackMetaEvent("PageView", {
-      content_name: "v4-rafa_age",
-      funnel: "v4-rafa",
-      step: 1,
-      step_name: "age",
-    });
-  }, []);
-
   const isSuccessPage = currentStep === "success";
   const isQuestionnaire = currentStep !== "intro";
   const successHash = "#gracias";
@@ -1120,13 +1167,10 @@ export default function Home() {
     if (trackedViewContentStepsRef.current.has(stepKey)) return;
     trackedViewContentStepsRef.current.add(stepKey);
 
-    trackMetaEvent("ViewContent", {
-      content_name: `v4-rafa_${currentStep}`,
-      funnel: "v4-rafa",
-      step: currentQuestionIndex + 1,
-      step_name: currentStep,
-      total_steps: visibleQuestionSteps.length,
-    });
+    trackMetaEvent(
+      "ViewContent",
+      buildViewContentData(currentStep, currentQuestionIndex, visibleQuestionSteps.length)
+    );
   }, [currentQuestionIndex, currentStep, visibleQuestionSteps]);
 
   useEffect(() => {
@@ -1135,6 +1179,25 @@ export default function Home() {
   }, [currentStep, shouldAskZipCode]);
 
   function transitionTo(nextStep: FunnelStep, direction: "forward" | "backward") {
+    if (
+      direction === "forward" &&
+      nextStep !== "success" &&
+      nextStep !== "intro" &&
+      nextStep !== "age" &&
+      visibleQuestionSteps.includes(nextStep)
+    ) {
+      const nextStepIndex = visibleQuestionSteps.indexOf(nextStep);
+      const stepKey = `${nextStep}:${visibleQuestionSteps.join("-")}`;
+
+      if (nextStepIndex >= 0 && !trackedViewContentStepsRef.current.has(stepKey)) {
+        trackedViewContentStepsRef.current.add(stepKey);
+        trackMetaEvent(
+          "ViewContent",
+          buildViewContentData(nextStep, nextStepIndex, visibleQuestionSteps.length)
+        );
+      }
+    }
+
     setSlideDirection(direction);
     setIsTransitioningOut(true);
     if (transitionTimeoutRef.current !== null) {
@@ -1174,6 +1237,21 @@ export default function Home() {
     nextStep: FunnelStep
   ) {
     setAnswers((prev) => ({ ...prev, [field]: value }));
+
+    const trackingWindow = window as MetaTrackingWindow;
+
+    if (nextStep === "goal" && typeof trackingWindow.fbq === "function") {
+      trackingWindow.fbq("track", "ViewContent", {
+        content_name: "v4-rafa_goal",
+        content_category: "iul_funnel_step",
+        content_type: "lead_form_step",
+        funnel: "v4-rafa",
+        step: 2,
+        step_name: "goal",
+        total_steps: visibleQuestionSteps.length,
+      });
+    }
+
     window.setTimeout(() => {
       transitionTo(nextStep, "forward");
     }, 120);
@@ -1701,6 +1779,20 @@ export default function Home() {
     return (
       <div key={`panel-${panelKey}`} className="w-full">
         <div className="mx-auto flex w-full max-w-[760px] flex-col items-center">
+          {currentStep === "goal" ? (
+            <MetaStepEvent
+              eventName="ViewContent"
+              data={{
+                content_name: "v4-rafa_goal",
+                content_category: "iul_funnel_step",
+                content_type: "lead_form_step",
+                funnel: "v4-rafa",
+                step: 2,
+                step_name: "goal",
+                total_steps: visibleQuestionSteps.length,
+              }}
+            />
+          ) : null}
           <div className="flex w-full items-center justify-between gap-3 md:gap-4">
             <button
               type="button"
