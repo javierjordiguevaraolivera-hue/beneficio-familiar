@@ -544,7 +544,7 @@ function buildMetaLeadData(answers: FunnelAnswers, normalizedPhone: string) {
       content_category: "iul_funnel",
       funnel: "v4-rafa",
       status: "submitted",
-      age: getAgeRangeMidpoint(answers.ageGroup),
+      age_range_midpoint: getAgeRangeMidpoint(answers.ageGroup),
       age_range: answers.ageGroup,
       insurance_goal: answers.insuranceGoal,
       state: stateCode || stateName || undefined,
@@ -1115,19 +1115,6 @@ export default function Home() {
     transitionTo("name", "forward");
   }, [currentStep, shouldAskZipCode]);
 
-  useEffect(() => {
-    if (
-      currentStep === "intro" ||
-      currentStep === "age" ||
-      currentStep === "success" ||
-      !visibleQuestionSteps.includes(currentStep)
-    ) {
-      return;
-    }
-
-    trackMetaViewContentStep(currentStep, currentQuestionIndex, visibleQuestionSteps.length);
-  }, [currentQuestionIndex, currentStep, visibleQuestionSteps]);
-
   function transitionTo(nextStep: FunnelStep, direction: "forward" | "backward") {
     setSlideDirection(direction);
     setIsTransitioningOut(true);
@@ -1370,7 +1357,6 @@ export default function Home() {
         "",
         `${window.location.pathname}${window.location.search}${successHash}`,
       );
-      trackMetaLead(completedAnswers, normalizedPhone);
       transitionTo("success", "forward");
     } catch (error) {
       const message =
