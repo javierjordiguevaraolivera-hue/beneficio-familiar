@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { inferUsZipFromStateAndPhone } from "@/lib/infer-us-zip";
 
 const trustBadges = [
@@ -104,6 +104,9 @@ const stateOptions = [
   "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
   "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming", "District of Columbia",
 ];
+
+const metaPixelId = "1492754292286984";
+const metaTrackedPath = "/v4-rafa";
 
 const metaStateCodes: Record<string, string> = {
   Alabama: "al",
@@ -216,7 +219,6 @@ const emptyAnswers: FunnelAnswers = {
 };
 
 const deviceStorageKey = "beneficio-familiar-device-id";
-const metaPixelId = "826163019855530";
 
 const thankYouHighlights = [
   {
@@ -447,67 +449,31 @@ function buildLocationBackup(state?: string | null, phone?: string | null) {
   };
 }
 
-function buildMetaLeadTrackingData(args: {
-  answers: FunnelAnswers;
-  normalizedPhone: string;
-  deviceId: string;
-}) {
-  const stateName = args.answers.state || args.answers.detectedState;
-  const stateCode = metaStateCodes[stateName] || "";
-  const city = extractCityFromLocation(args.answers.locationText);
-  const zipCode = args.answers.zipCode.trim();
-  const userData = Object.fromEntries(
-    Object.entries({
-      em: normalizeMetaEmail(args.answers.email),
-      ph: normalizeMetaPhone(args.normalizedPhone),
-      fn: normalizeMetaName(args.answers.firstName),
-      ln: normalizeMetaName(args.answers.lastName),
-      ct: city ? normalizeMetaCity(city) : "",
-      st: stateCode,
-      zp: zipCode,
-      country: "us",
-      external_id: args.deviceId.trim().toLowerCase(),
-    }).filter(([, value]) => value)
-  );
-
-  const customData = Object.fromEntries(
-    Object.entries({
-      content_name: "v4-rafa_lead",
-      lead_type: "iul",
-      status: "submitted",
-      age_range: args.answers.ageGroup,
-      age_range_midpoint: getAgeRangeMidpoint(args.answers.ageGroup),
-      insurance_goal: args.answers.insuranceGoal,
-      state: stateCode || stateName || undefined,
-      city: city || undefined,
-      zip_code: zipCode || undefined,
-      country: "us",
-    }).filter(([, value]) => value !== "" && value != null)
-  );
-
-  return { userData, customData };
-}
-
 type MetaTrackingWindow = Window &
   typeof globalThis & {
-    fbq?: (...args: unknown[]) => void;
-    __metaPixelId?: string;
-    __metaPageViewTracked?: boolean;
+    fbq?: ((...args: unknown[]) => void) & {
+      callMethod?: (...args: unknown[]) => void;
+      queue?: unknown[];
+    };
+    __v4RafaMetaPixelId?: string;
+    __v4RafaTrackedViewContentSteps?: Set<string>;
+    __v4RafaLeadTracked?: boolean;
   };
 
 function getMetaTrackingWindow() {
   if (typeof window === "undefined") return null;
+  if (window.location.pathname !== metaTrackedPath) return null;
   return window as MetaTrackingWindow;
 }
 
 function trackMetaEvent(
-  eventName: "PageView" | "ViewContent" | "Lead",
+  eventName: "ViewContent" | "Lead",
   data?: Record<string, unknown>,
   retries = 20
 ) {
   const trackingWindow = getMetaTrackingWindow();
 
-  if (!trackingWindow) return;
+  if (!trackingWindow) return false;
 
   if (typeof trackingWindow.fbq === "function") {
     if (data && Object.keys(data).length > 0) {
@@ -515,64 +481,13 @@ function trackMetaEvent(
     } else {
       trackingWindow.fbq("track", eventName);
     }
-    return;
+    return true;
   }
 
-  if (retries <= 0) return;
+  if (retries <= 0) return false;
 
   window.setTimeout(() => trackMetaEvent(eventName, data, retries - 1), 250);
-}
-
-function updateMetaAdvancedMatching(userData: Record<string, unknown>) {
-  const trackingWindow = getMetaTrackingWindow();
-
-  if (!trackingWindow || typeof trackingWindow.fbq !== "function") return;
-
-  trackingWindow.fbq("init", trackingWindow.__metaPixelId || metaPixelId, userData);
-}
-
-function MetaStepEvent({
-  eventName,
-  data,
-}: {
-  eventName: "ViewContent" | "Lead";
-  data?: Record<string, unknown>;
-}) {
-  useEffect(() => {
-    const fireEvent = () => {
-      const trackingWindow = window as MetaTrackingWindow;
-
-      if (typeof trackingWindow.fbq === "function") {
-        if (data && Object.keys(data).length > 0) {
-          trackingWindow.fbq("track", eventName, data);
-        } else {
-          trackingWindow.fbq("track", eventName);
-        }
-        return true;
-      }
-
-      return false;
-    };
-
-    if (fireEvent()) return;
-
-    const retryId = window.setInterval(() => {
-      if (fireEvent()) {
-        window.clearInterval(retryId);
-      }
-    }, 250);
-
-    const timeoutId = window.setTimeout(() => {
-      window.clearInterval(retryId);
-    }, 5000);
-
-    return () => {
-      window.clearInterval(retryId);
-      window.clearTimeout(timeoutId);
-    };
-  }, [data, eventName]);
-
-  return null;
+  return false;
 }
 
 function buildViewContentData(step: FunnelStep, stepIndex: number, totalSteps: number) {
@@ -585,6 +500,77 @@ function buildViewContentData(step: FunnelStep, stepIndex: number, totalSteps: n
     step_name: step,
     total_steps: totalSteps,
   };
+}
+
+function trackMetaViewContentStep(step: FunnelStep, stepIndex: number, totalSteps: number) {
+  const trackingWindow = getMetaTrackingWindow();
+
+  if (!trackingWindow || step === "age") return;
+
+  if (!trackingWindow.__v4RafaTrackedViewContentSteps) {
+    trackingWindow.__v4RafaTrackedViewContentSteps = new Set();
+  }
+
+  const stepKey = `v4-rafa:${totalSteps}:${step}`;
+  if (trackingWindow.__v4RafaTrackedViewContentSteps.has(stepKey)) return;
+
+  trackingWindow.__v4RafaTrackedViewContentSteps.add(stepKey);
+  trackMetaEvent("ViewContent", buildViewContentData(step, stepIndex, totalSteps));
+}
+
+function buildMetaLeadData(answers: FunnelAnswers, normalizedPhone: string) {
+  const stateName = answers.state || answers.detectedState;
+  const stateCode = metaStateCodes[stateName] || "";
+  const city = extractCityFromLocation(answers.locationText);
+  const zipCode = answers.zipCode.trim();
+
+  const userData = Object.fromEntries(
+    Object.entries({
+      em: normalizeMetaEmail(answers.email),
+      ph: normalizeMetaPhone(normalizedPhone),
+      fn: normalizeMetaName(answers.firstName),
+      ln: normalizeMetaName(answers.lastName),
+      ct: city ? normalizeMetaCity(city) : "",
+      st: stateCode,
+      zp: zipCode,
+      country: "us",
+      external_id: getOrCreateDeviceId().trim().toLowerCase(),
+    }).filter(([, value]) => value)
+  );
+
+  const customData = Object.fromEntries(
+    Object.entries({
+      content_name: "v4-rafa_lead",
+      content_category: "iul_funnel",
+      funnel: "v4-rafa",
+      status: "submitted",
+      age: getAgeRangeMidpoint(answers.ageGroup),
+      age_range: answers.ageGroup,
+      insurance_goal: answers.insuranceGoal,
+      state: stateCode || stateName || undefined,
+      city: city || undefined,
+      zip_code: zipCode || undefined,
+      country: "us",
+    }).filter(([, value]) => value !== "" && value != null)
+  );
+
+  return { userData, customData };
+}
+
+function trackMetaLead(answers: FunnelAnswers, normalizedPhone: string) {
+  const trackingWindow = getMetaTrackingWindow();
+
+  if (!trackingWindow || trackingWindow.__v4RafaLeadTracked) return;
+
+  trackingWindow.__v4RafaLeadTracked = true;
+
+  try {
+    const { userData, customData } = buildMetaLeadData(answers, normalizedPhone);
+    trackingWindow.fbq?.("init", trackingWindow.__v4RafaMetaPixelId || metaPixelId, userData);
+    trackMetaEvent("Lead", customData);
+  } catch {
+    trackMetaEvent("Lead");
+  }
 }
 
 function optionButtonClass(isSelected: boolean, isRecommended = false) {
@@ -946,10 +932,7 @@ export default function Home() {
   const [zipError, setZipError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [isSubmittingLead, setIsSubmittingLead] = useState(false);
-  const [leadEventNonce, setLeadEventNonce] = useState<string | null>(null);
   const transitionTimeoutRef = useRef<number | null>(null);
-  const trackedLeadNonceRef = useRef<string | null>(null);
-  const trackedViewContentStepsRef = useRef<Set<string>>(new Set());
 
   const isSuccessPage = currentStep === "success";
   const isQuestionnaire = currentStep !== "intro";
@@ -961,9 +944,13 @@ export default function Home() {
     : "";
   const resolvedUsState = stateOptions.includes(answers.state) ? answers.state : "";
   const shouldAskZipCode = !resolvedUsState && !detectedUsState;
-  const visibleQuestionSteps = shouldAskZipCode
-    ? (["age", "goal", "state", "name", "phone"] as FunnelStep[])
-    : (["age", "goal", "name", "phone"] as FunnelStep[]);
+  const visibleQuestionSteps = useMemo(
+    () =>
+      shouldAskZipCode
+        ? (["age", "goal", "state", "name", "phone"] as FunnelStep[])
+        : (["age", "goal", "name", "phone"] as FunnelStep[]),
+    [shouldAskZipCode],
+  );
   const currentQuestionIndex = visibleQuestionSteps.indexOf(currentStep);
   const progressLabel =
     currentQuestionIndex >= 0
@@ -1111,7 +1098,7 @@ export default function Home() {
   useEffect(() => {
     const guardSuccessHash = () => {
       if (window.location.hash !== successHash) return;
-      if (currentStep === "success" || leadEventNonce) return;
+      if (currentStep === "success") return;
 
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
       setCurrentStep("age");
@@ -1121,37 +1108,12 @@ export default function Home() {
     guardSuccessHash();
     window.addEventListener("hashchange", guardSuccessHash);
     return () => window.removeEventListener("hashchange", guardSuccessHash);
-  }, [currentStep, leadEventNonce, successHash]);
+  }, [currentStep, successHash]);
 
   useEffect(() => {
-    if (!leadEventNonce || currentStep !== "success" || window.location.hash !== successHash) return;
-    if (trackedLeadNonceRef.current === leadEventNonce) return;
-
-    trackedLeadNonceRef.current = leadEventNonce;
-
-    try {
-      const deviceId = getOrCreateDeviceId();
-      const { userData, customData } = buildMetaLeadTrackingData({
-        answers,
-        normalizedPhone,
-        deviceId,
-      });
-
-      if (Object.keys(userData).length > 0) {
-        updateMetaAdvancedMatching(userData);
-      }
-
-      trackMetaEvent("Lead", customData);
-    } catch {
-      trackMetaEvent("Lead");
-    }
-  }, [
-    answers,
-    currentStep,
-    leadEventNonce,
-    normalizedPhone,
-    successHash,
-  ]);
+    if (currentStep !== "state" || shouldAskZipCode) return;
+    transitionTo("name", "forward");
+  }, [currentStep, shouldAskZipCode]);
 
   useEffect(() => {
     if (
@@ -1163,41 +1125,10 @@ export default function Home() {
       return;
     }
 
-    const stepKey = `${currentStep}:${visibleQuestionSteps.join("-")}`;
-    if (trackedViewContentStepsRef.current.has(stepKey)) return;
-    trackedViewContentStepsRef.current.add(stepKey);
-
-    trackMetaEvent(
-      "ViewContent",
-      buildViewContentData(currentStep, currentQuestionIndex, visibleQuestionSteps.length)
-    );
+    trackMetaViewContentStep(currentStep, currentQuestionIndex, visibleQuestionSteps.length);
   }, [currentQuestionIndex, currentStep, visibleQuestionSteps]);
 
-  useEffect(() => {
-    if (currentStep !== "state" || shouldAskZipCode) return;
-    transitionTo("name", "forward");
-  }, [currentStep, shouldAskZipCode]);
-
   function transitionTo(nextStep: FunnelStep, direction: "forward" | "backward") {
-    if (
-      direction === "forward" &&
-      nextStep !== "success" &&
-      nextStep !== "intro" &&
-      nextStep !== "age" &&
-      visibleQuestionSteps.includes(nextStep)
-    ) {
-      const nextStepIndex = visibleQuestionSteps.indexOf(nextStep);
-      const stepKey = `${nextStep}:${visibleQuestionSteps.join("-")}`;
-
-      if (nextStepIndex >= 0 && !trackedViewContentStepsRef.current.has(stepKey)) {
-        trackedViewContentStepsRef.current.add(stepKey);
-        trackMetaEvent(
-          "ViewContent",
-          buildViewContentData(nextStep, nextStepIndex, visibleQuestionSteps.length)
-        );
-      }
-    }
-
     setSlideDirection(direction);
     setIsTransitioningOut(true);
     if (transitionTimeoutRef.current !== null) {
@@ -1237,20 +1168,6 @@ export default function Home() {
     nextStep: FunnelStep
   ) {
     setAnswers((prev) => ({ ...prev, [field]: value }));
-
-    const trackingWindow = window as MetaTrackingWindow;
-
-    if (nextStep === "goal" && typeof trackingWindow.fbq === "function") {
-      trackingWindow.fbq("track", "ViewContent", {
-        content_name: "v4-rafa_goal",
-        content_category: "iul_funnel_step",
-        content_type: "lead_form_step",
-        funnel: "v4-rafa",
-        step: 2,
-        step_name: "goal",
-        total_steps: visibleQuestionSteps.length,
-      });
-    }
 
     window.setTimeout(() => {
       transitionTo(nextStep, "forward");
@@ -1453,7 +1370,7 @@ export default function Home() {
         "",
         `${window.location.pathname}${window.location.search}${successHash}`,
       );
-      setLeadEventNonce(`${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`);
+      trackMetaLead(completedAnswers, normalizedPhone);
       transitionTo("success", "forward");
     } catch (error) {
       const message =
@@ -1779,20 +1696,6 @@ export default function Home() {
     return (
       <div key={`panel-${panelKey}`} className="w-full">
         <div className="mx-auto flex w-full max-w-[760px] flex-col items-center">
-          {currentStep === "goal" ? (
-            <MetaStepEvent
-              eventName="ViewContent"
-              data={{
-                content_name: "v4-rafa_goal",
-                content_category: "iul_funnel_step",
-                content_type: "lead_form_step",
-                funnel: "v4-rafa",
-                step: 2,
-                step_name: "goal",
-                total_steps: visibleQuestionSteps.length,
-              }}
-            />
-          ) : null}
           <div className="flex w-full items-center justify-between gap-3 md:gap-4">
             <button
               type="button"
