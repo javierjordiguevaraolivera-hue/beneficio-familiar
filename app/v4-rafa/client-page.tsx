@@ -503,6 +503,11 @@ function getMetaTrackingWindow() {
   return window as MetaTrackingWindow;
 }
 
+function isThankYouUrl() {
+  if (typeof window === "undefined") return false;
+  return window.location.hash === "#gracias";
+}
+
 function getCookieValue(name: string) {
   if (typeof document === "undefined") return "";
 
@@ -635,10 +640,10 @@ function trackMetaPageView() {
   const trackingWindow = ensureMetaPixel();
 
   if (!trackingWindow || trackingWindow.__v4RafaPageViewTracked) return;
+  if (isThankYouUrl()) return;
 
   trackingWindow.__v4RafaPageViewTracked = true;
   const eventId = `v4-rafa-pageview-${Date.now()}`;
-  trackingWindow.fbq?.("track", "PageView", {}, { eventID: eventId });
   trackingWindow.fbq?.("trackSingle", metaPixelId, "PageView", {}, { eventID: eventId });
   sendMetaConversionsEvent({ eventName: "PageView", eventId });
 }
