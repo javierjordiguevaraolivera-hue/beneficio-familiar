@@ -381,6 +381,17 @@ function extractCityFromLocation(locationText: string) {
   return city;
 }
 
+function formatProgramAvailability(locationText: string, state: string) {
+  const safeState = state.trim();
+  const city = safeState ? extractCityFromLocation(locationText) : "";
+
+  if (city && normalizeMetaText(city) !== normalizeMetaText(safeState)) {
+    return `${city}, ${safeState}`;
+  }
+
+  return safeState || "tu área";
+}
+
 function normalizeMetaText(value: string) {
   return value
     .trim()
@@ -1116,6 +1127,14 @@ function UnsureIcon({ className = "h-[1em] w-[1em]" }: { className?: string }) {
   );
 }
 
+function AlertTriangleIcon({ className = "h-[1em] w-[1em]" }: { className?: string }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className={className} fill="currentColor">
+      <path d="M12 2.25c.52 0 .99.28 1.24.74l9.52 17.12A1.42 1.42 0 0 1 21.52 22H2.48a1.42 1.42 0 0 1-1.24-1.89L10.76 2.99c.25-.46.72-.74 1.24-.74Zm-1 6.25v6.25h2V8.5h-2Zm0 8.25v2h2v-2h-2Z" />
+    </svg>
+  );
+}
+
 export default function V4RafaClientPage({
   initialAgeRejected = false,
 }: {
@@ -1165,6 +1184,10 @@ export default function V4RafaClientPage({
     currentQuestionIndex >= 0
       ? ((currentQuestionIndex + 1) / visibleQuestionSteps.length) * 100
       : null;
+  const programAvailability = formatProgramAvailability(
+    answers.locationText || defaultLocationText,
+    resolvedUsState || detectedUsState,
+  );
   const animationClass = isTransitioningOut
     ? "animate-[survey-question-out_0.18s_cubic-bezier(0.4,0,1,1)_forwards]"
     : "animate-[survey-question-in_0.42s_cubic-bezier(0.22,0.61,0.36,1)]";
@@ -1968,6 +1991,17 @@ export default function V4RafaClientPage({
     return (
       <div key={`panel-${panelKey}`} className="w-full">
         <div className="mx-auto flex w-full max-w-[760px] flex-col items-center">
+          <div className="-mx-3 mb-4 w-[calc(100%+24px)] overflow-hidden border-y border-[#f0bf00] bg-[#fff1ad] shadow-[0_8px_18px_rgba(161,116,0,0.18)] md:mx-0 md:mb-5 md:w-full md:rounded-[12px] md:border">
+            <div className="h-[5px] bg-[#f4c400]" />
+            <div className="flex items-center justify-center gap-2.5 px-4 py-3.5 text-center text-[#050a14] md:px-6 md:py-4">
+              <AlertTriangleIcon className="h-[28px] w-[28px] shrink-0 text-[#f59e0b] drop-shadow-[0_1px_0_rgba(0,0,0,0.2)] md:h-[32px] md:w-[32px]" />
+              <p className="max-w-[660px] text-balance text-[21px] leading-[1.12] font-black tracking-[-0.01em] md:text-[29px]">
+                Nuevo Programa de Seguro de Vida
+                <span className="block">Disponible en {programAvailability}</span>
+              </p>
+            </div>
+          </div>
+
           <div className="flex w-full items-center justify-between gap-3 md:gap-4">
             <button
               type="button"
@@ -1988,7 +2022,7 @@ export default function V4RafaClientPage({
           <div className={`mt-5 text-center md:mt-6 ${animationClass}`}>
             {currentStep === "age" ? (
               <p className="mx-auto mb-1 max-w-[520px] text-[14px] font-extrabold uppercase tracking-[0.04em] text-[var(--brand)] md:mb-1.5 md:text-[16px]">
-                Aplica para los beneficios IUL
+                Reclama los beneficios IUL
               </p>
             ) : null}
             <h2 className="mx-auto max-w-[720px] text-[30px] leading-[1.16] font-bold tracking-[-0.05em] text-[#101820] md:text-[46px]">
@@ -2373,7 +2407,11 @@ export default function V4RafaClientPage({
         <section className="px-0 py-0 md:px-4 md:py-6">{renderSuccessPage()}</section>
       ) : (
         <>
-          <div className="mx-auto flex min-h-[calc(100vh-60px)] w-full max-w-[1200px] flex-col items-center px-3 pb-6 pt-8 md:px-4 md:pb-10 md:pt-4">
+          <div
+            className={`mx-auto flex min-h-[calc(100vh-60px)] w-full max-w-[1200px] flex-col items-center px-3 pb-6 md:px-4 md:pb-10 ${
+              isQuestionnaire ? "pt-0 md:pt-0" : "pt-8 md:pt-4"
+            }`}
+          >
             <section
               className={`flex w-full flex-col items-center ${
                 isQuestionnaire ? "justify-start" : "justify-center"
